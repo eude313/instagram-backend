@@ -55,14 +55,20 @@ class LoginView(APIView):
 
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        user = serializer.validated_data['user']
-        refresh = RefreshToken.for_user(user)
-        return Response({
-            "user": UserSerializer(user).data,
-            "refresh": str(refresh),
-            "access": str(refresh.access_token),
-        })
+        if serializer.is_valid():
+            user = serializer.validated_data['user']
+            refresh = RefreshToken.for_user(user)
+            return Response({
+                "user": UserSerializer(user).data,
+                "refresh": str(refresh),
+                "access": str(refresh.access_token),
+            })
+        else:
+            return Response(
+                {"detail": serializer.errors.get('non_field_errors', "Invalid login credentials.")},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    
     
 
 class ValidateTokenView(APIView):

@@ -20,9 +20,11 @@ class LoginSerializer(serializers.Serializer):
 
     def validate(self, data):
         user = authenticate(username=data['email'], password=data['password'])
-        if user and user.is_active:
-            return {'user': user}
-        raise serializers.ValidationError("Incorrect Credentials")
+        if not user:
+            raise serializers.ValidationError("Invalid email or password.")
+        if not user.is_active:
+            raise serializers.ValidationError("This account is inactive.")
+        return {'user': user}  
 
 class PasswordResetSerializer(serializers.Serializer):
     email = serializers.EmailField()
@@ -56,7 +58,6 @@ class MediaItemSerializer(serializers.ModelSerializer):
         model = MediaItem
         fields = ['id', 'file', 'media_type', 'order']
         
-
 class PostSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     comments = CommentSerializer(many=True, read_only=True)
