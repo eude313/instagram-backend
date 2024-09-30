@@ -1,6 +1,6 @@
 from rest_framework import viewsets, permissions, status, generics, filters
 from django_filters.rest_framework import DjangoFilterBackend
-from .models import User, Profile, Post, Story, Reel, Message, Follow, Like, Notification, Comment, MediaItem,StoryItem,SavedPost
+from .models import User, Profile, Post, Story, Reel, Message, Follow, Like, Notification, Comment, SavedPost
 from rest_framework.response import Response
 from .serializers import (
     UserSerializer, 
@@ -69,8 +69,6 @@ class LoginView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
     
-    
-
 class ValidateTokenView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -133,7 +131,6 @@ class PasswordResetConfirmView(generics.GenericAPIView):
         else:
             return Response({"detail": "Invalid reset link"}, status=status.HTTP_400_BAD_REQUEST)
 
-
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserSerializer
@@ -165,11 +162,33 @@ class UserViewSet(viewsets.ModelViewSet):
 class ProfileViewSet(viewsets.ModelViewSet):
     queryset = Profile.objects.all()
     serializer_class = ProfileSerializer
-    permission_classes = [IsOwnerOrReadOnly]
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
+    @action(detail=False, methods=['GET', 'PATCH'], permission_classes=[permissions.IsAuthenticated])
+    def me(self, request):
+        profile = request.user.profile
+        if request.method == 'GET':
+            serializer = self.get_serializer(profile)
+            return Response(serializer.data)
+        elif request.method == 'PATCH':
+            serializer = self.get_serializer(profile, data=request.data, partial=True)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=False, methods=['DELETE'], permission_classes=[permissions.IsAuthenticated])
+    def remove_profile_picture(self, request):
+        profile = request.user.profile
+        if profile.profile_picture:
+            profile.profile_picture.delete()
+            profile.profile_picture = None
+            profile.save()
+            return Response({"message": "Profile picture removed successfully"}, status=status.HTTP_204_NO_CONTENT)
+        return Response({"error": "No profile picture to remove"}, status=status.HTTP_400_BAD_REQUEST)
 
 class PostViewSet(viewsets.ModelViewSet):
-    queryset = Post.objects.all()
+    queryset = Post.objects.all().order_by('-created_at')
     serializer_class = PostSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
@@ -202,14 +221,13 @@ class PostViewSet(viewsets.ModelViewSet):
             return Response({"detail": "Post unliked."}, status=status.HTTP_200_OK)
         return Response({"detail": "Post was not liked."}, status=status.HTTP_400_BAD_REQUEST)
 
+    
     @action(detail=True, methods=['POST'])
     def add_comment(self, request, pk=None):
         post = self.get_object()
         serializer = CommentSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(user=request.user, post=post)
-            post.comments_count = F('comments_count') + 1
-            post.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -235,9 +253,8 @@ class PostViewSet(viewsets.ModelViewSet):
         share_link = f"{request.scheme}://{request.get_host()}/posts/{post.id}/"
         return Response({"share_link": share_link}, status=status.HTTP_200_OK)
 
-
 class StoryViewSet(viewsets.ModelViewSet):
-    queryset = Story.objects.all()
+    queryset = Story.objects.all().order_by('-created_at')
     serializer_class = StorySerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -277,7 +294,7 @@ class StoryViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
 class ReelViewSet(viewsets.ModelViewSet):
-    queryset = Reel.objects.all()
+    queryset = Reel.objects.all().order_by('-created_at')
     serializer_class = ReelSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
@@ -299,7 +316,26 @@ class ReelViewSet(viewsets.ModelViewSet):
         if deleted:
             return Response({"detail": "Reel unsaved."}, status=status.HTTP_200_OK)
         return Response({"detail": "Reel was not saved."}, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['POST'])
+    def like(self, request, pk=None):
+        reel = self.get_object()
+        like, created = Like.objects.get_or_create(user=request.user, reel=reel)
+        if created:
+            reel.likes_count = F('likes_count') + 1
+            reel.save()
+            return Response({"detail": "Reel liked."}, status=status.HTTP_201_CREATED)
+        return Response({"detail": "Reel already liked."}, status=status.HTTP_200_OK)
 
+    @action(detail=True, methods=['POST'])
+    def unlike(self, request, pk=None):
+        reel = self.get_object()
+        deleted, _ = Like.objects.filter(user=request.user, reel=reel).delete()
+        if deleted:
+            reel.likes_count = F('likes_count') - 1
+            reel.save()
+            return Response({"detail": "Reel unliked."}, status=status.HTTP_200_OK)
+        return Response({"detail": "Reel was not liked."}, status=status.HTTP_400_BAD_REQUEST)
 
 class MessageViewSet(viewsets.ModelViewSet):
     serializer_class = MessageSerializer

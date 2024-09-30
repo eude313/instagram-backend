@@ -8,6 +8,8 @@ accounts=>{
    email: medatic611@marchub.com
    password: @Blessing01#
 
+  email: vonalaf106@sgatra.com
+  password: @Lex_luther01#
 }
 
         # serializer = LoginSerializer(data=request.data)
@@ -251,3 +253,41 @@ export default function Posts() {
     </>
   )
 }
+
+
+
+class StoryItem(models.Model):
+    MEDIA_TYPES = (
+        ('image', 'Image'),
+        ('video', 'Video'),
+    )
+
+    story = models.ForeignKey(Story, related_name='media_items', on_delete=models.CASCADE)
+    file = models.FileField(upload_to='story_media/')
+    media_type = models.CharField(max_length=5, choices=MEDIA_TYPES)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['order']
+
+    def __str__(self):
+        return f"{self.media_type} for Story {self.story.id}"
+
+
+
+class MediaItem(models.Model):
+    MEDIA_TYPES = (
+        ('image', 'Image'),
+        ('video', 'Video'),
+    )
+
+    post = models.ForeignKey(Post, related_name='media_items', on_delete=models.CASCADE)
+    file = models.FileField(upload_to='post_media/')
+    media_type = models.CharField(max_length=5, choices=MEDIA_TYPES)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['order']
+
+    def __str__(self):
+        return f"{self.media_type} for {self.post}"

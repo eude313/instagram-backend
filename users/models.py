@@ -2,6 +2,12 @@ from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, Permis
 from django.db import models
 from django.utils import timezone
 from django.conf import settings
+import magic
+from django.core.exceptions import ValidationError
+import os
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+
 
 class CustomUserManager(BaseUserManager):
     def create_user(self, email, username, password=None, **extra_fields):
@@ -10,6 +16,10 @@ class CustomUserManager(BaseUserManager):
         email = self.normalize_email(email)
         user = self.model(email=email, username=username, **extra_fields)
         user.set_password(password)
+
+        if not user.profile_picture:
+            user.profile_picture = settings.DEFAULT_PROFILE_PICTURE
+        
         user.save(using=self._db)
         return user
 
@@ -24,6 +34,7 @@ class CustomUserManager(BaseUserManager):
 
         return self.create_user(email, username, password, **extra_fields)
 
+# user model
 class User(AbstractBaseUser, PermissionsMixin):
     email = models.EmailField(unique=True)
     username = models.CharField(max_length=30, unique=True)
@@ -44,7 +55,13 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def __str__(self):
         return self.email
+    
+    def save(self, *args, **kwargs):
+        if not self.profile_picture:
+            self.profile_picture = settings.DEFAULT_PROFILE_PICTURE
+        super(User, self).save(*args, **kwargs)
 
+# profile model
 class Profile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
     bio = models.TextField(max_length=500, blank=True)
@@ -55,6 +72,57 @@ class Profile(models.Model):
     def __str__(self):
         return f"{self.user.username}'s profile"
 
+    @property
+    def profile_picture(self):
+        return self.user.profile_picture
+    
+    # Signals to create or update user profile
+    @receiver(post_save, sender=User)
+    def create_user_profile(sender, instance, created, **kwargs):
+        if created:
+            Profile.objects.get_or_create(user=instance)
+
+    @receiver(post_save, sender=User)
+    def save_user_profile(sender, instance, **kwargs):
+        instance.profile.save()
+
+# Custom file type validation for Media uploads
+def validate_file_type(value):
+    ext = os.path.splitext(value.name)[1]  # Get the file extension
+    valid_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.mp4', '.mov', '.avi']
+    if ext.lower() not in valid_extensions:
+        raise ValidationError('Unsupported file extension.')
+
+def media_upload_path(instance, filename):
+    return f'user_{instance.user.id}/media/{filename}'
+
+class Media(models.Model):
+    IMAGE = 'image'
+    VIDEO = 'video'
+    MEDIA_TYPE_CHOICES = [
+        (IMAGE, 'Image'),
+        (VIDEO, 'Video'),
+    ]
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    media_file = models.FileField(upload_to=media_upload_path, validators=[validate_file_type])
+    media_type = models.CharField(max_length=10, choices=MEDIA_TYPE_CHOICES)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        ext = os.path.splitext(self.media_file.name)[1].lower()
+        if ext in ['.jpg', '.jpeg', '.png', '.gif']:
+            self.media_type = Media.IMAGE
+        elif ext in ['.mp4', '.mov', '.avi']:
+            self.media_type = Media.VIDEO
+        else:
+            raise ValidationError('Unsupported file extension.')
+        super(Media, self).save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.media_type.capitalize()} uploaded by {self.user.username}"
+
+# post model
 class Post(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     caption = models.TextField(blank=True)
@@ -62,35 +130,12 @@ class Post(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     likes_count = models.PositiveIntegerField(default=0)
     comments_count = models.PositiveIntegerField(default=0)
+    media = models.ManyToManyField(Media, blank=True, related_name='post_media')
 
     def __str__(self):
         return f"Post by {self.user.username} on {self.created_at.strftime('%Y-%m-%d %H:%M')}"
 
-class Story(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    created_at = models.DateTimeField(auto_now_add=True)
-    expires_at = models.DateTimeField()
-
-    def __str__(self):
-        return f"Story by {self.user.username} on {self.created_at.strftime('%Y-%m-%d %H:%M')}"
-
-class StoryItem(models.Model):
-    MEDIA_TYPES = (
-        ('image', 'Image'),
-        ('video', 'Video'),
-    )
-
-    story = models.ForeignKey(Story, related_name='media_items', on_delete=models.CASCADE)
-    file = models.FileField(upload_to='story_media/')
-    media_type = models.CharField(max_length=5, choices=MEDIA_TYPES)
-    order = models.PositiveIntegerField(default=0)
-
-    class Meta:
-        ordering = ['order']
-
-    def __str__(self):
-        return f"{self.media_type} for Story {self.story.id}"
-
+# Reel model
 class Reel(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     video = models.FileField(upload_to='reels/')
@@ -102,23 +147,18 @@ class Reel(models.Model):
     def __str__(self):
         return f"Reel by {self.user.username} on {self.created_at.strftime('%Y-%m-%d %H:%M')}"
 
-class MediaItem(models.Model):
-    MEDIA_TYPES = (
-        ('image', 'Image'),
-        ('video', 'Video'),
-    )
 
-    post = models.ForeignKey(Post, related_name='media_items', on_delete=models.CASCADE)
-    file = models.FileField(upload_to='post_media/')
-    media_type = models.CharField(max_length=5, choices=MEDIA_TYPES)
-    order = models.PositiveIntegerField(default=0)
+    def clean(self):
+        super().clean()
 
-    class Meta:
-        ordering = ['order']
+        # Validate the file is a video
+        mime = magic.Magic(mime=True)
+        file_mime_type = mime.from_buffer(self.video.read())
 
-    def __str__(self):
-        return f"{self.media_type} for {self.post}"
-        
+        if not file_mime_type.startswith('video'):
+            raise ValidationError("The uploaded file must be a video.")
+
+# Save post model       
 class SavedPost(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='saved_posts')
     post = models.ForeignKey('Post', on_delete=models.CASCADE, null=True, blank=True)
@@ -134,6 +174,17 @@ class SavedPost(models.Model):
         elif self.reel:
             return f"{self.user.username} saved reel {self.reel.id}"
 
+# Story model
+class Story(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    media = models.ManyToManyField(Media, blank=True, related_name='story_media')
+
+    def __str__(self):
+        return f"Story by {self.user.username} on {self.created_at.strftime('%Y-%m-%d %H:%M')}"
+
+# User status model
 class UserStatus(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
     is_online = models.BooleanField(default=False)
@@ -161,6 +212,7 @@ class UserStatus(models.Model):
     def __str__(self):
         return f"{self.user.username} - {'Online' if self.is_online else f'Last seen at {self.last_seen}'}"
 
+# Messages model
 class Message(models.Model):
     MEDIA_TYPES = (
         ('text', 'Text'),
@@ -187,6 +239,7 @@ class Message(models.Model):
     def __str__(self):
         return f"Message from {self.sender.username} to {self.recipient.username}"
 
+# Comments model
 class Comment(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     post = models.ForeignKey(Post, on_delete=models.CASCADE, null=True, blank=True, related_name='comments')
@@ -205,6 +258,7 @@ class Comment(models.Model):
         else:
             return f"Comment by {self.user.username}"
 
+# Like model
 class Like(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     post = models.ForeignKey(Post, on_delete=models.CASCADE, null=True, blank=True)
@@ -223,6 +277,7 @@ class Like(models.Model):
         elif self.comment:
             return f"{self.user.username} likes comment {self.comment.id}"
 
+# Follow and followers model
 class Follow(models.Model):
     follower = models.ForeignKey(User, related_name='following', on_delete=models.CASCADE)
     followed = models.ForeignKey(User, related_name='followers', on_delete=models.CASCADE)
@@ -234,6 +289,7 @@ class Follow(models.Model):
     def __str__(self):
         return f"{self.follower.username} follows {self.followed.username}"
 
+# Notifications model
 class Notification(models.Model):
     NOTIFICATION_TYPES = (
         ('like', 'Like'),

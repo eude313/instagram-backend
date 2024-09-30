@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import User, Profile, Post, Story, Reel, Message, Follow, Like, Notification, Comment, MediaItem, StoryItem, UserStatus
+from .models import User, Profile, Post, Story, Reel, Message, Follow, Like, Notification, Comment, Media, UserStatus, SavedPost
 
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
@@ -11,21 +11,35 @@ class ProfileAdmin(admin.ModelAdmin):
     list_display = ('user', 'gender', 'phone_number')
     search_fields = ('user__username', 'phone_number')
 
+@admin.register(Media)
+class MediaAdmin(admin.ModelAdmin):
+    list_display = ['user', 'media_type', 'uploaded_at']
+    list_filter = ['media_type', 'uploaded_at']
+    search_fields = ['user__username', 'media_file']
+
 @admin.register(Post)
 class PostAdmin(admin.ModelAdmin):
-    list_display = ('user', 'caption', 'created_at', 'likes_count', 'comments_count')
-    search_fields = ('user__username', 'caption')
+    list_display = ['user', 'caption', 'created_at', 'likes_count', 'comments_count']
+    list_filter = ['created_at']
+    search_fields = ['user__username', 'caption']
 
 @admin.register(Story)
 class StoryAdmin(admin.ModelAdmin):
-    list_display = ('user', 'created_at', 'expires_at')
-    search_fields = ('user__username',)
+    list_display = ['user', 'created_at', 'expires_at']
+    list_filter = ['created_at', 'expires_at']
+    search_fields = ['user__username']
 
 @admin.register(Reel)
 class ReelAdmin(admin.ModelAdmin):
-    list_display = ('user', 'caption', 'created_at', 'likes_count', 'comments_count')
-    search_fields = ('user__username', 'caption')
+    list_display = ['user', 'caption', 'created_at', 'likes_count', 'comments_count']
+    list_filter = ['created_at']
+    search_fields = ['user__username']
 
+@admin.register(SavedPost)
+class SavedPostAdmin(admin.ModelAdmin):
+    list_display = ['user', 'post', 'reel', 'saved_at']
+    search_fields = ['user__username', 'post__id', 'reel__id']
+    
 @admin.register(UserStatus)
 class UserStatusAdmin(admin.ModelAdmin):
     list_display = ('user', 'is_online', 'last_seen')
@@ -78,13 +92,3 @@ class CommentAdmin(admin.ModelAdmin):
         elif obj.reel:
             return 'Reel'
         return 'Unknown'
-
-@admin.register(MediaItem)
-class MediaItemAdmin(admin.ModelAdmin):
-    list_display = ('post', 'media_type', 'order')
-    search_fields = ('post__user__username',)
-
-@admin.register(StoryItem)
-class StoryItemAdmin(admin.ModelAdmin):
-    list_display = ('story', 'media_type', 'order')
-    search_fields = ('story__user__username',)

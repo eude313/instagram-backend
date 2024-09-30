@@ -1,9 +1,12 @@
-from pathlib import Path
+
 import os
-from dotenv import load_dotenv
 import cloudinary
-import cloudinary.uploader
 import cloudinary.api
+import dj_database_url
+from pathlib import Path
+import cloudinary.uploader
+from decouple import config 
+from dotenv import load_dotenv
 from datetime import timedelta
 
 load_dotenv()
@@ -28,12 +31,12 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'users.apps.UsersConfig',
     'rest_framework',
     'rest_framework_simplejwt',
     'corsheaders',
     'djoser',
     'django_filters',
-    'users',
     'channels'
 ]
 
@@ -69,12 +72,35 @@ TEMPLATES = [
 WSGI_APPLICATION = 'settings.wsgi.application'
 ASGI_APPLICATION = 'settings.asgi.application'
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.sqlite3',
+#         'NAME': BASE_DIR / 'db.sqlite3',
+#     }
+# }
+
+MODE = "dev"
+# development
+if MODE == "dev":
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ.get('DB_NAME'),
+            'USER': os.environ.get('DB_USER'),
+            'PASSWORD': os.environ.get('DB_PASSWORD'),
+            'HOST': os.environ.get('DB_HOST'),
+        }
     }
-}
+# production
+else:
+    DATABASES = {
+        'default': dj_database_url.config(
+            default=config('DATABASE_URL')
+        )
+    }
+
+db_from_env = dj_database_url.config(conn_max_age=500)
+DATABASES['default'].update(db_from_env)
 
 CHANNEL_LAYERS = {
     'default': {
@@ -108,6 +134,9 @@ USE_TZ = True
 STATIC_URL = '/static/'
 MEDIA_URL = '/images/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+
+DEFAULT_PROFILE_PICTURE = '/static/images/user.png'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
