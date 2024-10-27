@@ -16,8 +16,9 @@ from .serializers import (
 
     LoginSerializer, 
     PasswordResetSerializer, 
-    SetNewPasswordSerializer
-)
+    SetNewPasswordSerializer,
+    ValidateTokenSerializer
+)  
 from django.utils import timezone
 from datetime import timedelta
 from rest_framework.decorators import action
@@ -32,6 +33,10 @@ from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
 from django.core.mail import send_mail
 from django.conf import settings
+from rest_framework.pagination import PageNumberPagination
+
+from users import serializers
+import logging
 
 
 class RegisterView(generics.CreateAPIView):
@@ -40,51 +45,97 @@ class RegisterView(generics.CreateAPIView):
     permission_classes = []
 
     def post(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
+        serializer = self.get_serializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
         refresh = RefreshToken.for_user(user)
         return Response({
-            "user": UserSerializer(user).data,
+            "user": UserSerializer(user, context={'request': request}).data,
             "refresh": str(refresh),
             "access": str(refresh.access_token),
         }, status=status.HTTP_201_CREATED)
+
+# LoginView: Handles user login and returns JWT tokens (refresh and access)
+logger = logging.getLogger(__name__)
 
 class LoginView(APIView):
     permission_classes = []
 
     def post(self, request):
-        serializer = LoginSerializer(data=request.data)
-        if serializer.is_valid():
+        try:
+            serializer = LoginSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            
             user = serializer.validated_data['user']
-            refresh = RefreshToken.for_user(user)
-            return Response({
-                "user": UserSerializer(user).data,
-                "refresh": str(refresh),
-                "access": str(refresh.access_token),
-            })
-        else:
+            refresh = serializer.validated_data['refresh']
+            access = serializer.validated_data['access']
+            
+            response = Response({
+                'user': UserSerializer(user, context={'request': request}).data,
+                'refresh': refresh,
+                'access': access
+            }, status=status.HTTP_200_OK)
+            
+            # Add CORS headers to the response
+            response["Access-Control-Allow-Origin"] = "http://127.0.0.1:3000"
+            response["Access-Control-Allow-Credentials"] = "true"
+            response["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+            response["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+            
+            return response
+            
+        except serializers.ValidationError as e:
+            logger.error(f"Login validation error: {str(e)}")
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.exception("Unexpected error in LoginView")
             return Response(
-                {"detail": serializer.errors.get('non_field_errors', "Invalid login credentials.")},
-                status=status.HTTP_400_BAD_REQUEST
+                {'error': 'An unexpected error occurred'}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-    
+        
 class ValidateTokenView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        return Response({"valid": True})
+        return Response({
+            'user': UserSerializer(request.user, context={'request': request}).data
+        })
+      
+# class LogoutView(APIView):
+    permission_classes = [IsAuthenticated]
 
-class LogoutView(APIView):
     def post(self, request):
         try:
-            refresh_token = request.data["refresh_token"]
+            refresh_token = request.data.get('refresh_token')
             token = RefreshToken(refresh_token)
             token.blacklist()
             return Response(status=status.HTTP_205_RESET_CONTENT)
         except Exception as e:
-            return Response(status=status.HTTP_400_BAD_REQUEST)
+            logger.exception("Logout error")
+            return Response(
+                {'error': 'Invalid token'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+class LogoutView(APIView):
+    permission_classes = []  
 
+    def post(self, request):
+        try:
+            refresh_token = request.data.get('refresh_token')
+            if not refresh_token:
+                return Response({'error': 'Refresh token required'}, 
+                              status=status.HTTP_400_BAD_REQUEST)
+            token = RefreshToken(refresh_token)
+            token.blacklist()
+            return Response(status=status.HTTP_205_RESET_CONTENT)
+        except Exception as e:
+            logger.exception("Logout error")
+            return Response(
+                {'error': 'Invalid token'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+             
 class PasswordResetView(generics.GenericAPIView):
     serializer_class = PasswordResetSerializer
     permission_classes = []
@@ -158,12 +209,62 @@ class UserViewSet(viewsets.ModelViewSet):
         
         serializer = self.get_serializer(users, many=True)
         return Response(serializer.data)
-
+    
+    @action(detail=True, methods=['GET'])
+    def hover_details(self, request, pk=None):
+        try:
+            user = self.get_object()
+            current_user = request.user
+            
+            # Get the user's profile
+            profile = Profile.objects.get(user=user)
+            
+            # Get follow relationship information
+            is_followed = Follow.objects.filter(follower=current_user, followed=user).exists()
+            follows_you = Follow.objects.filter(follower=user, followed=current_user).exists()
+            
+            # Get follower and following counts
+            followers_count = Follow.objects.filter(followed=user).count()
+            following_count = Follow.objects.filter(follower=user).count()
+            
+            # Get latest posts with media
+            latest_posts = Post.objects.filter(user=user).prefetch_related('media').order_by('-created_at')[:3]
+            
+            response_data = {
+                'user': {
+                    'id': user.id,
+                    'username': user.username,
+                    'profile_picture': request.build_absolute_uri(user.profile_picture.url) if user.profile_picture else None,
+                    'is_verified': user.is_verified,
+                    'is_staff': user.is_staff,
+                    'bio': profile.bio if profile else None,
+                    'is_followed': is_followed,
+                    'follows_you': follows_you
+                },
+                'stats': {
+                    'posts_count': Post.objects.filter(user=user).count(),
+                    'followers_count': followers_count,
+                    'following_count': following_count,
+                },
+                'latest_posts': [{
+                    'id': post.id,
+                    'media': [{
+                        'media_type': media.media_type,
+                        'media_file': request.build_absolute_uri(media.media_file.url)
+                    } for media in post.media.all()]
+                } for post in latest_posts]
+            }
+            
+            return Response(response_data, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+   
 class ProfileViewSet(viewsets.ModelViewSet):
     queryset = Profile.objects.all()
     serializer_class = ProfileSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
-
+    
     @action(detail=False, methods=['GET', 'PATCH'], permission_classes=[permissions.IsAuthenticated])
     def me(self, request):
         profile = request.user.profile
@@ -187,11 +288,17 @@ class ProfileViewSet(viewsets.ModelViewSet):
             return Response({"message": "Profile picture removed successfully"}, status=status.HTTP_204_NO_CONTENT)
         return Response({"error": "No profile picture to remove"}, status=status.HTTP_400_BAD_REQUEST)
 
+class PostPagination(PageNumberPagination):
+    page_size = 10
+    page_size_query_param = 'limit'
+    max_page_size = 100
+
 class PostViewSet(viewsets.ModelViewSet):
     queryset = Post.objects.all().order_by('-created_at')
     serializer_class = PostSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
-
+    pagination_class = PostPagination   
+    
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
 
@@ -252,7 +359,7 @@ class PostViewSet(viewsets.ModelViewSet):
         post = self.get_object()
         share_link = f"{request.scheme}://{request.get_host()}/posts/{post.id}/"
         return Response({"share_link": share_link}, status=status.HTTP_200_OK)
-
+       
 class StoryViewSet(viewsets.ModelViewSet):
     queryset = Story.objects.all().order_by('-created_at')
     serializer_class = StorySerializer

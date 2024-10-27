@@ -1,6 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
+
 from .views import (
     RegisterView, 
     LoginView,
@@ -40,21 +41,23 @@ urlpatterns = [
     path('', include(router.urls)),
     
     path('auth/register/', RegisterView.as_view(), name='register'),
+    
     path('auth/login/', LoginView.as_view(), name='login'),
+    path('auth/validate-token/', ValidateTokenView.as_view(), name='validate_token'),
+    path('auth/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('auth/logout/', LogoutView.as_view(), name='logout'),
     path('auth/password-reset/', PasswordResetView.as_view(), name='password_reset'),
     path('auth/password-reset-confirm/', PasswordResetConfirmView.as_view(), name='password_reset_confirm'),
-    path('auth/validate-token/', ValidateTokenView.as_view(), name='validate_token'),
+        
     path('users/search/', UserViewSet.as_view({'get': 'search'}), name='user-search'),
 
     path('posts/<int:pk>/save/', PostViewSet.as_view({'post': 'save_post'}), name='save-post'),
     path('posts/<int:pk>/unsave/', PostViewSet.as_view({'post': 'unsave_post'}), name='unsave-post'),
     path('posts/<int:pk>/comments/', PostViewSet.as_view({'post': 'add_comment'}), name='post-comment'),
 
-
-
     path('reels/<int:pk>/save/', ReelViewSet.as_view({'post': 'save_reel'}), name='save-reel'),
     path('reels/<int:pk>/unsave/', ReelViewSet.as_view({'post': 'unsave_reel'}), name='unsave-reel'),
+
     path('profiles/<int:pk>/update/', ProfileViewSet.as_view({'patch': 'update_profile'}), name='update-profile'),
     path('profiles/<int:pk>/remove-photo/', ProfileViewSet.as_view({'delete': 'remove_profile_picture'}), name='remove-profile-photo'),
 

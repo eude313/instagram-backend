@@ -2,15 +2,17 @@ from rest_framework import serializers
 from .models import User, Profile, Post, Story, Reel, Message, Follow, Like, Notification, Comment, Media, UserStatus
 from django.conf import settings
 from django.contrib.auth import authenticate
+from rest_framework_simplejwt.tokens import AccessToken, RefreshToken, TokenError
 from django.utils import timezone
 
 
 class UserSerializer(serializers.ModelSerializer):
     has_story = serializers.SerializerMethodField()
+    profile_picture = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ('id', 'email', 'username', 'password', 'is_verified', 'is_staff', 'has_story')
+        fields = ('id', 'email', 'first_name', 'last_name', 'username', 'password', 'is_verified', 'is_staff', 'has_story', 'profile_picture')
         extra_kwargs = {'password': {'write_only': True}}
 
     def get_has_story(self, obj):
@@ -20,17 +22,47 @@ class UserSerializer(serializers.ModelSerializer):
         user = User.objects.create_user(**validated_data)
         return user
 
+    def get_profile_picture(self, obj):
+        if obj.profile_picture:
+            return self.context.get('request').build_absolute_uri(obj.profile_picture.url)
+        return self.context.get('request').build_absolute_uri(settings.MEDIA_URL + settings.DEFAULT_PROFILE_PICTURE)
+
+# LoginSerializer: Authenticates the user based on email and password
 class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField()
 
     def validate(self, data):
         user = authenticate(username=data['email'], password=data['password'])
-        if not user:
-            raise serializers.ValidationError("Invalid email or password.")
-        if not user.is_active:
-            raise serializers.ValidationError("This account is inactive.")
-        return {'user': user}  
+        if user and user.is_active:
+            refresh = RefreshToken.for_user(user)
+            return {
+                'user': user,
+                'refresh': str(refresh),
+                'access': str(refresh.access_token),
+            }
+        raise serializers.ValidationError("Incorrect Credentials")
+
+# ValidateTokenSerializer: Validates the token and returns the user if valid
+class ValidateTokenSerializer(serializers.Serializer):
+    token = serializers.CharField()
+
+    def validate_token(self, value):
+        try:
+            AccessToken(value)
+        except TokenError:
+            raise serializers.ValidationError("Invalid token")
+        return value
+
+    def validate(self, attrs):
+        token = attrs.get('token')
+        try:
+            access_token = AccessToken(token)
+            user = User.objects.get(id=access_token['user_id'])
+            attrs['user'] = user
+        except User.DoesNotExist:
+            raise serializers.ValidationError("User not found")
+        return attrs
 
 class PasswordResetSerializer(serializers.Serializer):
     email = serializers.EmailField()
@@ -48,6 +80,7 @@ class ProfileSerializer(serializers.ModelSerializer):
     is_staff = serializers.BooleanField(source='user.is_staff', read_only=True)
     is_verified = serializers.BooleanField(source='user.is_verified', read_only=True)
     has_story = serializers.SerializerMethodField()
+    profile_picture = serializers.SerializerMethodField()
 
     class Meta:
         model = Profile
@@ -60,9 +93,9 @@ class ProfileSerializer(serializers.ModelSerializer):
 
     def get_profile_picture(self, obj):
         if obj.user.profile_picture:
-            return obj.user.profile_picture.url
-        return f'{settings.MEDIA_URL}{settings.DEFAULT_PROFILE_PICTURE}'
-    
+            return self.context['request'].build_absolute_uri(obj.user.profile_picture.url)
+        return self.context['request'].build_absolute_uri(settings.MEDIA_URL + settings.DEFAULT_PROFILE_PICTURE)
+
     def update(self, instance, validated_data):
         user_data = validated_data.pop('user', {})
         user = instance.user
@@ -89,6 +122,11 @@ class MediaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Media
         fields = ['id', 'media_file', 'media_type']
+        
+    def validate_media_file(self, value):
+        if value.size > 10 * 1024 * 1024:  # 10MB limit
+            raise serializers.ValidationError("File size too large. Max size is 10MB.")
+        return value
    
 class PostSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)

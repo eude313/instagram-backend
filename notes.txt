@@ -291,3 +291,540 @@ class MediaItem(models.Model):
 
     def __str__(self):
         return f"{self.media_type} for {self.post}"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        # user model
+class User(AbstractBaseUser, PermissionsMixin):
+    email = models.EmailField(unique=True)
+    username = models.CharField(max_length=30, unique=True)
+    first_name = models.CharField(max_length=30, blank=True)
+    last_name = models.CharField(max_length=30, blank=True)
+    is_active = models.BooleanField(default=True)
+    is_staff = models.BooleanField(default=False)
+    date_joined = models.DateTimeField(default=timezone.now)
+    profile_picture = models.ImageField(upload_to='profile_pictures/', blank=True, null=True)
+    followers_count = models.PositiveIntegerField(default=0)
+    following_count = models.PositiveIntegerField(default=0)
+    is_verified = models.BooleanField(default=False)
+
+    objects = CustomUserManager()
+
+    USERNAME_FIELD = 'email'
+    REQUIRED_FIELDS = ['username']
+
+    def __str__(self):
+        return self.email
+    
+    def save(self, *args, **kwargs):
+        if not self.profile_picture:
+            self.profile_picture = settings.DEFAULT_PROFILE_PICTURE
+        super(User, self).save(*args, **kwargs)
+
+# profile model
+class Profile(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE)
+    bio = models.TextField(max_length=500, blank=True)
+    website = models.URLField(max_length=200, blank=True)
+    phone_number = models.CharField(max_length=20, blank=True)
+    gender = models.CharField(max_length=10, choices=[('M', 'Male'), ('F', 'Female'), ('O', 'Other')], blank=True)
+
+    def __str__(self):
+        return f"{self.user.username}'s profile"
+
+    @property
+    def profile_picture(self):
+        return self.user.profile_picture
+    
+    # Signals to create or update user profile
+    @receiver(post_save, sender=User)
+    def create_user_profile(sender, instance, created, **kwargs):
+        if created:
+            Profile.objects.get_or_create(user=instance)
+
+    @receiver(post_save, sender=User)
+    def save_user_profile(sender, instance, **kwargs):
+        instance.profile.save()
+
+# Custom file type validation for Media uploads
+def validate_file_type(value):
+    ext = os.path.splitext(value.name)[1]  # Get the file extension
+    valid_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.mp4', '.mov', '.avi']
+    if ext.lower() not in valid_extensions:
+        raise ValidationError('Unsupported file extension.')
+
+def media_upload_path(instance, filename):
+    return f'user_{instance.user.id}/media/{filename}'
+
+class Media(models.Model):
+    IMAGE = 'image'
+    VIDEO = 'video'
+    MEDIA_TYPE_CHOICES = [
+        (IMAGE, 'Image'),
+        (VIDEO, 'Video'),
+    ]
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    media_file = models.FileField(upload_to=media_upload_path, validators=[validate_file_type])
+    media_type = models.CharField(max_length=10, choices=MEDIA_TYPE_CHOICES)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        ext = os.path.splitext(self.media_file.name)[1].lower()
+        if ext in ['.jpg', '.jpeg', '.png', '.gif']:
+            self.media_type = Media.IMAGE
+        elif ext in ['.mp4', '.mov', '.avi']:
+            self.media_type = Media.VIDEO
+        else:
+            raise ValidationError('Unsupported file extension.')
+        super(Media, self).save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.media_type.capitalize()} uploaded by {self.user.username}"
+
+
+# User status model
+class UserStatus(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE)
+    is_online = models.BooleanField(default=False)
+    last_seen = models.DateTimeField(null=True, blank=True)
+
+    def mark_online(self):
+        self.is_online = True
+        self.last_seen = timezone.now()
+        self.save()
+
+    def mark_offline(self):
+        self.is_online = False
+        self.last_seen = timezone.now()
+        self.save()
+
+    def update_last_seen(self):
+        self.last_seen = timezone.now()
+        self.save()
+
+    @classmethod
+    def get_or_create_user_status(cls, user):
+        user_status, created = cls.objects.get_or_create(user=user)
+        return user_status
+
+    def __str__(self):
+        return f"{self.user.username} - {'Online' if self.is_online else f'Last seen at {self.last_seen}'}"
+
+# Messages model
+class Message(models.Model):
+    MEDIA_TYPES = (
+        ('text', 'Text'),
+        ('image', 'Image'),
+        ('video', 'Video'),
+        ('audio', 'Audio'),
+    )
+
+    sender = models.ForeignKey(User, related_name='sent_messages', on_delete=models.CASCADE)
+    recipient = models.ForeignKey(User, related_name='received_messages', on_delete=models.CASCADE)
+    content = models.TextField(blank=True)  
+    file = models.FileField(upload_to='message_media/', blank=True, null=True)  
+    media_type = models.CharField(max_length=5, choices=MEDIA_TYPES, default='text')
+    timestamp = models.DateTimeField(auto_now_add=True)
+    is_read = models.BooleanField(default=False)
+    read_at = models.DateTimeField(null=True, blank=True)
+
+    def mark_as_read(self):
+        if not self.is_read:
+            self.is_read = True
+            self.read_at = timezone.now()
+            self.save()
+
+    def __str__(self):
+        return f"Message from {self.sender.username} to {self.recipient.username}"
+
+ # Notifications model class Notification(models.Model):     NOTIFICATION_TYPES = (         ('like', 'Like'),         ('comment', 'Comment'),         ('follow', 'Follow'),         ('message', 'Message'),     )      recipient = models.ForeignKey(User, related_name='notifications', on_delete=models.CASCADE)     sender = models.ForeignKey(User, on_delete=models.CASCADE)     notification_type = models.CharField(max_length=20, choices=NOTIFICATION_TYPES)     post = models.ForeignKey(Post, on_delete=models.CASCADE, null=True, blank=True)     message = models.ForeignKey(Message, on_delete=models.CASCADE, null=True, blank=True)     timestamp = models.DateTimeField(auto_now_add=True)     is_read = models.BooleanField(default=False)     comment = models.ForeignKey(Comment, on_delete=models.CASCADE, null=True, blank=True)      def __str__(self):         if self.notification_type == 'comment':             return f"{self.sender.username} commented on your post/reel" 
+
+  
+class ProfileViewSet(viewsets.ModelViewSet):
+    queryset = Profile.objects.all()
+    serializer_class = ProfileSerializer
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+    
+    @action(detail=False, methods=['GET', 'PATCH'], permission_classes=[permissions.IsAuthenticated])
+    def me(self, request):
+        profile = request.user.profile
+        if request.method == 'GET':
+            serializer = self.get_serializer(profile)
+            return Response(serializer.data)
+        elif request.method == 'PATCH':
+            serializer = self.get_serializer(profile, data=request.data, partial=True)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=False, methods=['DELETE'], permission_classes=[permissions.IsAuthenticated])
+    def remove_profile_picture(self, request):
+        profile = request.user.profile
+        if profile.profile_picture:
+            profile.profile_picture.delete()
+            profile.profile_picture = None
+            profile.save()
+            return Response({"message": "Profile picture removed successfully"}, status=status.HTTP_204_NO_CONTENT)
+        return Response({"error": "No profile picture to remove"}, status=status.HTTP_400_BAD_REQUEST)
+
+class UserViewSet(viewsets.ModelViewSet):
+    queryset = User.objects.all()
+    serializer_class = UserSerializer
+    permission_classes = [IsAdminUserOrReadOnly]
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['username', 'email', 'first_name']
+
+    @action(detail=False, methods=['GET'])
+    def me(self, request):
+        serializer = self.get_serializer(request.user)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['GET'])
+    def search(self, request):
+        query = request.query_params.get('q', '')
+        if query:
+            users = self.queryset.filter(
+                Q(username__icontains=query) |
+                Q(email__icontains=query) |
+                Q(first_name__icontains=query) |
+                Q(last_name__icontains=query)
+            ).distinct()[:20]  
+        else:
+            users = User.objects.none()
+        
+        serializer = self.get_serializer(users, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['GET'])
+    def hover_details(self, request, pk=None):
+        try:
+            user = self.get_object()
+            current_user = request.user
+            
+            # Get the user's profile
+            profile = Profile.objects.get(user=user)
+            
+            # Get follow relationship information
+            is_followed = Follow.objects.filter(follower=current_user, followed=user).exists()
+            follows_you = Follow.objects.filter(follower=user, followed=current_user).exists()
+            
+            # Get follower and following counts
+            followers_count = Follow.objects.filter(followed=user).count()
+            following_count = Follow.objects.filter(follower=user).count()
+            
+            # Get latest posts with media
+            latest_posts = Post.objects.filter(user=user).prefetch_related('media').order_by('-created_at')[:3]
+            
+            response_data = {
+                'user': {
+                    'id': user.id,
+                    'username': user.username,
+                    'profile_picture': request.build_absolute_uri(user.profile_picture.url) if user.profile_picture else None,
+                    'is_verified': user.is_verified,
+                    'is_staff': user.is_staff,
+                    'bio': profile.bio if profile else None,
+                    'is_followed': is_followed,
+                    'follows_you': follows_you
+                },
+                'stats': {
+                    'posts_count': Post.objects.filter(user=user).count(),
+                    'followers_count': followers_count,
+                    'following_count': following_count,
+                },
+                'latest_posts': [{
+                    'id': post.id,
+                    'media': [{
+                        'media_type': media.media_type,
+                        'media_file': request.build_absolute_uri(media.media_file.url)
+                    } for media in post.media.all()]
+                } for post in latest_posts]
+            }
+            
+            return Response(response_data, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+   
+class MessageViewSet(viewsets.ModelViewSet):
+    serializer_class = MessageSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get_queryset(self):
+        user = self.request.user
+        return Message.objects.filter(Q(sender=user) | Q(recipient=user))
+
+    def perform_create(self, serializer):
+        message = serializer.save(sender=self.request.user)
+        self.send_message_notification(message)
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset().order_by('-timestamp')
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if request.user == instance.recipient:
+            instance.mark_as_read()
+            self.send_read_notification(instance)
+            return Response(self.get_serializer(instance).data)
+        return Response({"error": "You do not have permission to mark this message as read."}, status=status.HTTP_403_FORBIDDEN)
+
+    def create(self, request, *args, **kwargs):
+        media_file = request.FILES.get('file')
+        media_type = request.data.get('media_type')
+
+        if not request.data.get('content') and not media_file:
+            return Response(
+                {"error": "Either content or a media file must be provided."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if media_file and media_type not in ['image', 'video', 'audio']:
+            return Response({"error": "Invalid media type."}, status=status.HTTP_400_BAD_REQUEST)
+
+        return super().create(request, *args, **kwargs)
+
+    def send_message_notification(self, message):
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            f"user_{message.recipient.id}",
+            {
+                "type": "chat.message",
+                "message": MessageSerializer(message).data
+            }
+        )
+
+    def send_read_notification(self, message):
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            f"user_{message.sender.id}",
+            {
+                "type": "message.read",
+                "message_id": message.id
+            }
+        )
+
+
+class NotificationViewSet(viewsets.ModelViewSet):
+    queryset = Notification.objects.all()
+    serializer_class = NotificationSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+       
+class UserSerializer(serializers.ModelSerializer):
+    has_story = serializers.SerializerMethodField()
+    profile_picture = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ('id', 'email', 'first_name', 'last_name', 'username', 'password', 'is_verified', 'is_staff', 'has_story', 'profile_picture')
+        extra_kwargs = {'password': {'write_only': True}}
+
+    def get_has_story(self, obj):
+        return Story.objects.filter(user=obj, expires_at__gt=timezone.now()).exists()
+
+    def create(self, validated_data):
+        user = User.objects.create_user(**validated_data)
+        return user
+
+    def get_profile_picture(self, obj):
+        if obj.profile_picture:
+            return self.context.get('request').build_absolute_uri(obj.profile_picture.url)
+        return self.context.get('request').build_absolute_uri(settings.MEDIA_URL + settings.DEFAULT_PROFILE_PICTURE)
+
+class ProfileSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source='user.username', read_only=True)
+    email = serializers.EmailField(source='user.email', read_only=True)
+    first_name = serializers.CharField(source='user.first_name')
+    last_name = serializers.CharField(source='user.last_name')
+    is_staff = serializers.BooleanField(source='user.is_staff', read_only=True)
+    is_verified = serializers.BooleanField(source='user.is_verified', read_only=True)
+    has_story = serializers.SerializerMethodField()
+    profile_picture = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Profile
+        fields = ['username', 'email', 'first_name', 'last_name', 'bio', 'website', 'phone_number', 'gender', 'profile_picture', 'is_staff', 'is_verified', 'has_story']
+        read_only_fields = ['username', 'email', 'is_staff', 'is_verified']
+
+
+    def get_has_story(self, obj):
+        return Story.objects.filter(user=obj.user, expires_at__gt=timezone.now()).exists()
+
+    def get_profile_picture(self, obj):
+        if obj.user.profile_picture:
+            return self.context['request'].build_absolute_uri(obj.user.profile_picture.url)
+        return self.context['request'].build_absolute_uri(settings.MEDIA_URL + settings.DEFAULT_PROFILE_PICTURE)
+
+    def update(self, instance, validated_data):
+        user_data = validated_data.pop('user', {})
+        user = instance.user
+
+        for attr, value in user_data.items():
+            setattr(user, attr, value)
+        user.save()
+
+        return super().update(instance, validated_data)
+ 
+class UserStatusSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserStatus
+        fields = ['is_online', 'last_seen']
+
+class MessageSerializer(serializers.ModelSerializer):
+    sender = UserSerializer(read_only=True)
+    recipient = UserSerializer(read_only=True)
+    sender_username = serializers.CharField(write_only=True)
+    recipient_username = serializers.CharField(write_only=True)
+
+    class Meta:
+        model = Message
+        fields = ['id', 'sender', 'recipient', 'sender_username', 'recipient_username', 'content', 'media_type', 'file', 'timestamp', 'is_read', 'read_at']
+        extra_kwargs = {'file': {'required': False}}
+
+    def validate(self, data):
+        if not data.get('content') and not data.get('file'):
+            raise serializers.ValidationError("Either content or media file must be provided.")
+        return data
+
+    def create(self, validated_data):
+        sender_username = validated_data.pop('sender_username')
+        recipient_username = validated_data.pop('recipient_username')
+        sender = User.objects.get(username=sender_username)
+        recipient = User.objects.get(username=recipient_username)
+        return Message.objects.create(sender=sender, recipient=recipient, **validated_data)
+
+class NotificationSerializer(serializers.ModelSerializer):
+
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+from rest_framework_simplejwt.views import TokenRefreshView
+
+from .views import (
+    RegisterView, 
+    LoginView,
+    UserViewSet,
+    ProfileViewSet,
+    PostViewSet,
+    StoryViewSet,
+    ReelViewSet,
+    MessageViewSet,
+    FollowViewSet,
+    LikeViewSet,
+    NotificationViewSet,
+    CommentViewSet,
+
+    RegisterView, 
+    LoginView, 
+    LogoutView, 
+    PasswordResetView, 
+    PasswordResetConfirmView,
+    ValidateTokenView
+) 
+
+router = DefaultRouter()
+
+router.register(r'users', UserViewSet)
+router.register(r'profiles', ProfileViewSet)
+router.register(r'posts', PostViewSet)
+router.register(r'stories', StoryViewSet, basename='story')
+router.register(r'reels', ReelViewSet)
+router.register(r'messages', MessageViewSet, basename='message')
+router.register(r'follows', FollowViewSet)
+router.register(r'likes', LikeViewSet)
+router.register(r'notifications', NotificationViewSet)
+router.register(r'comments', CommentViewSet)
+
+urlpatterns = [
+    path('', include(router.urls)),
+    
+    path('auth/register/', RegisterView.as_view(), name='register'),
+    
+    path('auth/login/', LoginView.as_view(), name='login'),
+    path('auth/validate-token/', ValidateTokenView.as_view(), name='validate_token'),
+    path('auth/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('auth/logout/', LogoutView.as_view(), name='logout'),
+    path('auth/password-reset/', PasswordResetView.as_view(), name='password_reset'),
+    path('auth/password-reset-confirm/', PasswordResetConfirmView.as_view(), name='password_reset_confirm'),
+        
+    path('users/search/', UserViewSet.as_view({'get': 'search'}), name='user-search'),
+
+    path('posts/<int:pk>/save/', PostViewSet.as_view({'post': 'save_post'}), name='save-post'),
+    path('posts/<int:pk>/unsave/', PostViewSet.as_view({'post': 'unsave_post'}), name='unsave-post'),
+    path('posts/<int:pk>/comments/', PostViewSet.as_view({'post': 'add_comment'}), name='post-comment'),
+
+    path('reels/<int:pk>/save/', ReelViewSet.as_view({'post': 'save_reel'}), name='save-reel'),
+    path('reels/<int:pk>/unsave/', ReelViewSet.as_view({'post': 'unsave_reel'}), name='unsave-reel'),
+
+    path('profiles/<int:pk>/update/', ProfileViewSet.as_view({'patch': 'update_profile'}), name='update-profile'),
+    path('profiles/<int:pk>/remove-photo/', ProfileViewSet.as_view({'delete': 'remove_profile_picture'}), name='remove-profile-photo'),
+
+]
