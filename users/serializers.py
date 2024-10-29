@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import User, Profile, Post, Story, Reel, Message, Follow, Like, Notification, Comment, Media, UserStatus
+from .models import User, Profile, Post, Story, Reel, Message, Follow, Like, Notification, Comment, Media, UserStatus, Chat
 from django.conf import settings
 from django.contrib.auth import authenticate
 from rest_framework_simplejwt.tokens import AccessToken, RefreshToken, TokenError
@@ -133,10 +133,11 @@ class PostSerializer(serializers.ModelSerializer):
     comments = CommentSerializer(many=True, read_only=True)
     latest_comment = serializers.SerializerMethodField()
     media = MediaSerializer(many=True, read_only=False)
+    tags = serializers.JSONField(required=False)
 
     class Meta:
         model = Post
-        fields = ['id', 'user', 'caption', 'created_at', 'updated_at', 'likes_count', 'comments_count', 'comments', 'latest_comment', 'media']
+        fields = ['id', 'user', 'tags', 'caption', 'created_at', 'updated_at', 'likes_count', 'comments_count', 'comments', 'latest_comment', 'media']
 
     def get_latest_comment(self, obj):
         latest_comment = obj.comments.order_by('-created_at').first()
@@ -148,6 +149,11 @@ class PostSerializer(serializers.ModelSerializer):
         if len(value) > 2200:
             raise serializers.ValidationError("Caption cannot exceed 2200 characters.")
         return value
+    
+    def create(self, validated_data):
+        tags_data = validated_data.pop('tags', [])
+        post = Post.objects.create(**validated_data)
+        return post
     
 class LikeSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
@@ -172,33 +178,88 @@ class ReelSerializer(serializers.ModelSerializer):
         model = Reel
         fields = ['id', 'user', 'video', 'caption', 'created_at', 'likes_count', 'comments_count', 'comments']
 
+class ChatSerializer(serializers.ModelSerializer):
+    last_message = serializers.SerializerMethodField()
+    unread_count = serializers.SerializerMethodField()
+    participants_info = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Chat
+        fields = ['id', 'type', 'name', 'participants', 'created_at', 
+                 'updated_at', 'last_message', 'unread_count', 'participants_info']
+        read_only_fields = ['created_at', 'updated_at']
+
+    def get_last_message(self, obj):
+        last_message = obj.last_message
+        if last_message:
+            return MessageSerializer(last_message).data
+        return None
+
+    def get_unread_count(self, obj):
+        user = self.context['request'].user
+        return Message.objects.filter(
+            chat=obj,
+            read_by__exclude=user
+        ).exclude(sender=user).count()
+
+    def get_participants_info(self, obj):
+        return UserSerializer(obj.participants.all(), many=True).data
+    
 class UserStatusSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source='user.username', read_only=True)
+
     class Meta:
         model = UserStatus
-        fields = ['is_online', 'last_seen']
+        fields = ['user', 'username', 'is_online', 'last_seen']
+        read_only_fields = ['user', 'last_seen']
 
 class MessageSerializer(serializers.ModelSerializer):
-    sender = UserSerializer(read_only=True)
-    recipient = UserSerializer(read_only=True)
-    sender_username = serializers.CharField(write_only=True)
-    recipient_username = serializers.CharField(write_only=True)
+    sender_info = UserSerializer(source='sender', read_only=True)
+    read_by_users = serializers.SerializerMethodField()
+    file_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Message
-        fields = ['id', 'sender', 'recipient', 'sender_username', 'recipient_username', 'content', 'media_type', 'file', 'timestamp', 'is_read', 'read_at']
-        extra_kwargs = {'file': {'required': False}}
+        fields = ['id', 'chat', 'sender', 'sender_info', 'content', 
+                 'file', 'file_url', 'media_type', 'timestamp', 
+                 'read_by', 'read_by_users']
+        read_only_fields = ['sender', 'timestamp', 'read_by']
 
-    def validate(self, data):
-        if not data.get('content') and not data.get('file'):
-            raise serializers.ValidationError("Either content or media file must be provided.")
-        return data
+    def get_read_by_users(self, obj):
+        return UserSerializer(obj.read_by.all(), many=True).data
 
-    def create(self, validated_data):
-        sender_username = validated_data.pop('sender_username')
-        recipient_username = validated_data.pop('recipient_username')
-        sender = User.objects.get(username=sender_username)
-        recipient = User.objects.get(username=recipient_username)
-        return Message.objects.create(sender=sender, recipient=recipient, **validated_data)
+    def get_file_url(self, obj):
+        if obj.file:
+            return self.context['request'].build_absolute_uri(obj.file.url)
+        return None
+
+# class UserStatusSerializer(serializers.ModelSerializer):
+#     class Meta:
+#         model = UserStatus
+#         fields = ['is_online', 'last_seen']
+
+# class MessageSerializer(serializers.ModelSerializer):
+#     sender = UserSerializer(read_only=True)
+#     recipient = UserSerializer(read_only=True)
+#     sender_username = serializers.CharField(write_only=True)
+#     recipient_username = serializers.CharField(write_only=True)
+
+#     class Meta:
+#         model = Message
+#         fields = ['id', 'sender', 'recipient', 'sender_username', 'recipient_username', 'content', 'media_type', 'file', 'timestamp', 'is_read', 'read_at']
+#         extra_kwargs = {'file': {'required': False}}
+
+#     def validate(self, data):
+#         if not data.get('content') and not data.get('file'):
+#             raise serializers.ValidationError("Either content or media file must be provided.")
+#         return data
+
+#     def create(self, validated_data):
+#         sender_username = validated_data.pop('sender_username')
+#         recipient_username = validated_data.pop('recipient_username')
+#         sender = User.objects.get(username=sender_username)
+#         recipient = User.objects.get(username=recipient_username)
+#         return Message.objects.create(sender=sender, recipient=recipient, **validated_data)
 
 class FollowSerializer(serializers.ModelSerializer):
     follower = UserSerializer(read_only=True)

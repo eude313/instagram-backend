@@ -1,6 +1,21 @@
+from django.db.models import Count, Prefetch, Q, F
 from rest_framework import viewsets, permissions, status, generics, filters
 from django_filters.rest_framework import DjangoFilterBackend
-from .models import User, Profile, Post, Story, Reel, Message, Follow, Like, Notification, Comment, SavedPost
+from .models import (
+    User, 
+    Profile, 
+    Post, 
+    Story, 
+    Reel,
+    Message, 
+    Follow, 
+    Like, 
+    Notification, 
+    Comment, 
+    SavedPost, 
+    Chat, 
+    UserStatus
+)
 from rest_framework.response import Response
 from .serializers import (
     UserSerializer, 
@@ -13,7 +28,10 @@ from .serializers import (
     LikeSerializer, 
     NotificationSerializer, 
     CommentSerializer, 
+    ChatSerializer, 
+    UserStatusSerializer,
 
+    
     LoginSerializer, 
     PasswordResetSerializer, 
     SetNewPasswordSerializer,
@@ -23,8 +41,7 @@ from django.utils import timezone
 from datetime import timedelta
 from rest_framework.decorators import action
 from .permissions import IsOwnerOrReadOnly, IsAdminUserOrReadOnly
-from django.db.models import Q
-from django.db.models import F
+from django.shortcuts import get_object_or_404
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -37,7 +54,8 @@ from rest_framework.pagination import PageNumberPagination
 
 from users import serializers
 import logging
-
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
 
 class RegisterView(generics.CreateAPIView):
     queryset = User.objects.all()
@@ -117,6 +135,7 @@ class ValidateTokenView(APIView):
                 {'error': 'Invalid token'}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
+
 class LogoutView(APIView):
     permission_classes = []  
 
@@ -209,7 +228,100 @@ class UserViewSet(viewsets.ModelViewSet):
         
         serializer = self.get_serializer(users, many=True)
         return Response(serializer.data)
-    
+        
+    @action(detail=False, methods=['GET'])
+    def suggestions(self, request):
+        current_user = request.user
+        page_size = 5
+        show_all = request.query_params.get('show_all', 'false').lower() == 'true'
+        
+        # Get users who follow current user but aren't followed back
+        users_following_me = User.objects.filter(
+            following__followed=current_user
+        ).exclude(
+            followers__follower=current_user
+        )
+        
+        # Get followers of users that current user follows
+        followed_users_followers = User.objects.filter(
+            following__followed__in=Follow.objects.filter(
+                follower=current_user
+            ).values_list('followed', flat=True)
+        ).exclude(
+            id__in=Follow.objects.filter(
+                follower=current_user
+            ).values_list('followed', flat=True)
+        ).exclude(id=current_user.id)
+        
+        # Combine and remove duplicates
+        suggested_users = users_following_me.union(
+            followed_users_followers
+        )
+        
+        # If no suggestions found based on connections, get random users
+        if not suggested_users.exists():
+            suggested_users = User.objects.exclude(
+                id=current_user.id
+            ).exclude(
+                id__in=Follow.objects.filter(
+                    follower=current_user
+                ).values_list('followed', flat=True)
+            ).filter(
+                is_active=True
+            ).order_by('?')  # Random ordering
+        else:
+            suggested_users = suggested_users.order_by('?')
+        
+        # Add additional filters to get more relevant random users
+        suggested_users = suggested_users.annotate(
+            followers_count=Count('followers'),
+            posts_count=Count('post')
+        ).filter(
+            is_active=True
+        ).order_by(
+            '-followers_count',  # Prioritize users with more followers
+            '-posts_count',      # Then users with more posts
+            '?'                  # Finally, add some randomness
+        )
+        
+        # Limit to 10 users if show_all is True, otherwise use pagination
+        if show_all:
+            suggested_users = suggested_users[:10]
+            serializer = UserSerializer(suggested_users, many=True, context={'request': request})
+            return Response(serializer.data)
+        else:
+            paginator = PageNumberPagination()
+            paginator.page_size = page_size
+            paginated_users = paginator.paginate_queryset(suggested_users, request)
+            serializer = UserSerializer(paginated_users, many=True, context={'request': request})
+            return paginator.get_paginated_response(serializer.data)
+
+    @action(detail=False, methods=['GET'])
+    def random_users(self, request):
+        """
+        Get a list of random users excluding the current user and those already followed.
+        This is used as a fallback when there are no connection-based suggestions.
+        """
+        current_user = request.user
+        limit = int(request.query_params.get('limit', 5))
+        
+        random_users = User.objects.exclude(
+            Q(id=current_user.id) |
+            Q(id__in=Follow.objects.filter(follower=current_user).values_list('followed', flat=True))
+        ).annotate(
+            followers_count=Count('followers'),
+            posts_count=Count('post')
+        ).filter(
+            is_active=True
+        ).order_by(
+            '-followers_count',
+            '-posts_count',
+            '?'
+        )[:limit]
+        
+        serializer = UserSerializer(random_users, many=True, context={'request': request})
+        return Response(serializer.data)
+
     @action(detail=True, methods=['GET'])
     def hover_details(self, request, pk=None):
         try:
@@ -443,6 +555,343 @@ class ReelViewSet(viewsets.ModelViewSet):
             reel.save()
             return Response({"detail": "Reel unliked."}, status=status.HTTP_200_OK)
         return Response({"detail": "Reel was not liked."}, status=status.HTTP_400_BAD_REQUEST)
+
+# class ChatViewSet(viewsets.ModelViewSet):
+#     serializer_class = ChatSerializer
+#     permission_classes = [permissions.IsAuthenticated]
+
+#     def get_queryset(self):
+#         return Chat.objects.filter(participants=self.request.user)
+
+#     @action(detail=False, methods=['POST'])
+#     def create_or_get(self, request): 
+#         participants = request.data.get('participants', [])
+#         chat_type = request.data.get('type', 'single')
+#         name = request.data.get('name')
+
+#         # Add some debugging prints
+#         print(f"Received request data: {request.data}")
+#         print(f"Participants: {participants}")
+#         print(f"Chat type: {chat_type}")
+#         print(f"Name: {name}")
+
+#         if not participants:
+#             return Response(
+#                 {"error": "Participants list cannot be empty"}, 
+#                 status=status.HTTP_400_BAD_REQUEST
+#             )
+
+#         if chat_type == 'single' and len(participants) != 2:
+#             return Response(
+#                 {"error": "Single chat must have exactly 2 participants"},
+#                 status=status.HTTP_400_BAD_REQUEST
+#             )
+
+#         try:
+#             if chat_type == 'single':
+#                 # Check if chat already exists
+#                 existing_chat = Chat.objects.filter(
+#                     type='single',
+#                     participants__id__in=participants  # Modified this line
+#                 ).annotate(
+#                     participant_count=Count('participants')
+#                 ).filter(participant_count=len(participants))
+
+#                 if existing_chat.exists():
+#                     return Response(
+#                         self.get_serializer(existing_chat.first()).data
+#                     )
+
+#             # Create new chat
+#             chat = Chat.objects.create(type=chat_type, name=name)
+#             chat.participants.set(participants)
+#             return Response(
+#                 self.get_serializer(chat).data,
+#                 status=status.HTTP_201_CREATED
+#             )
+#         except Exception as e:  # Catch all exceptions for now (refine later)
+#             print(f"Error creating chat: {e}")
+#             return Response(
+#                 {"error": "An error occurred while creating the chat."},
+#                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
+#             )
+
+class ChatViewSet(viewsets.ModelViewSet):
+    serializer_class = ChatSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        # Optimize the queryset with select_related and prefetch_related
+        return Chat.objects.filter(
+            participants=self.request.user
+        ).prefetch_related(
+            'participants',
+            Prefetch(
+                'messages',
+                queryset=Message.objects.order_by('-timestamp')[:1],
+                to_attr='latest_message'
+            )
+        ).order_by('-updated_at')
+
+    def list(self, request, *args, **kwargs):
+        try:
+            queryset = self.get_queryset()
+            serializer = self.get_serializer(queryset, many=True)
+            return Response(serializer.data)
+        except Exception as e:
+            # Log the error for debugging
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error in ChatViewSet.list: {str(e)}")
+            return Response(
+                {"error": "Failed to retrieve chats"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['POST'])
+    def create_or_get(self, request):
+        try:
+            participants = request.data.get('participants', [])
+            chat_type = request.data.get('type', 'single')
+            name = request.data.get('name')
+
+            # Validate participants and chat type
+            if not participants:
+                return Response(
+                    {"error": "Participants list cannot be empty"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Convert participants to integers and remove duplicates
+            participants = list(set(map(int, participants)))
+            
+            # Validate participant existence
+            existing_users = User.objects.filter(id__in=participants).count()
+            if existing_users != len(participants):
+                return Response(
+                    {"error": "One or more participants do not exist"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if chat_type == 'single':
+                if len(participants) != 2:
+                    return Response(
+                        {"error": "Single chat must have exactly 2 participants"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                # Find existing single chat
+                existing_chat = Chat.objects.filter(
+                    type='single',
+                    participants__id__in=participants
+                ).annotate(
+                    participant_count=Count('participants')
+                ).filter(participant_count=2)
+                
+                for chat in existing_chat:
+                    # Check if this chat has exactly these participants
+                    chat_participants = set(chat.participants.values_list('id', flat=True))
+                    if chat_participants == set(participants):
+                        return Response(self.get_serializer(chat).data)
+
+                # Create new chat if none exists
+                user1 = User.objects.get(id=participants[0])
+                user2 = User.objects.get(id=participants[1])
+                name = f"{user1.username}-{user2.username}"
+
+            # Create new chat
+            chat = Chat.objects.create(type=chat_type, name=name)
+            chat.participants.set(participants)
+            chat.save()
+
+            return Response(
+                self.get_serializer(chat).data,
+                status=status.HTTP_201_CREATED
+            )
+
+        except Exception as e:
+            # Log the error for debugging
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error in create_or_get: {str(e)}")
+            return Response(
+                {"error": "An error occurred while creating the chat.", "detail": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+# class ChatViewSet(viewsets.ModelViewSet):
+#     serializer_class = ChatSerializer
+#     permission_classes = [permissions.IsAuthenticated]
+
+#     def get_queryset(self):
+#         return Chat.objects.filter(participants=self.request.user)
+
+#     @action(detail=False, methods=['POST'])
+#     def create_or_get(self, request): 
+#         participants = request.data.get('participants', [])
+#         chat_type = request.data.get('type', 'single')
+#         name = request.data.get('name')
+
+#         # Validate participants and chat type
+#         if not participants:
+#             return Response({"error": "Participants list cannot be empty"}, status=status.HTTP_400_BAD_REQUEST)
+        
+#         unique_participants = list(set(participants))
+#         if len(unique_participants) != len(participants):
+#             return Response({"error": "Duplicate participants are not allowed"}, status=status.HTTP_400_BAD_REQUEST)
+
+#         if chat_type == 'single' and (len(participants) != 2 or participants[0] == participants[1]):
+#             return Response({"error": "Single chat must have exactly 2 unique participants"}, status=status.HTTP_400_BAD_REQUEST)
+
+#         try:
+#             # Check if a single chat between these participants already exists
+#             if chat_type == 'single':
+#                 participant1, participant2 = participants
+#                 existing_chat = Chat.objects.filter(
+#                     type='single',
+#                     participants__id=participant1
+#                 ).filter(
+#                     participants__id=participant2
+#                 ).annotate(
+#                     num_participants=Count('participants')
+#                 ).filter(num_participants=2).first()
+
+#                 if existing_chat:
+#                     return Response(self.get_serializer(existing_chat).data)
+
+#                 # If no existing chat found, create a new one with a name based on participants
+#                 name = f"{User.objects.get(id=participant1).username}-{User.objects.get(id=participant2).username}"
+
+#             # Create the new chat
+#             chat = Chat.objects.create(type=chat_type, name=name)
+#             chat.participants.set(participants)
+
+#             return Response(self.get_serializer(chat).data, status=status.HTTP_201_CREATED)
+
+#         except Exception as e:
+#             return Response({"error": "An error occurred while creating the chat.", "detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    # @action(detail=False, methods=['POST'])
+    # def create_or_get(self, request): 
+    #     participants = request.data.get('participants', [])
+    #     chat_type = request.data.get('type', 'single')
+    #     name = request.data.get('name')
+
+    #     # Add some debugging prints
+    #     print(f"Received request data: {request.data}")
+    #     print(f"Participants: {participants}")
+    #     print(f"Chat type: {chat_type}")
+    #     print(f"Name: {name}")
+
+    #     # Validate participants
+    #     if not participants:
+    #         return Response(
+    #             {"error": "Participants list cannot be empty"}, 
+    #             status=status.HTTP_400_BAD_REQUEST
+    #         )
+
+    #     # Remove duplicates and validate participants
+    #     unique_participants = list(set(participants))
+    #     if len(unique_participants) != len(participants):
+    #         return Response(
+    #             {"error": "Duplicate participants are not allowed"},
+    #             status=status.HTTP_400_BAD_REQUEST
+    #         )
+
+    #     # Validate single chat requirements
+    #     if chat_type == 'single':
+    #         if len(participants) != 2:
+    #             return Response(
+    #                 {"error": "Single chat must have exactly 2 participants"},
+    #                 status=status.HTTP_400_BAD_REQUEST
+    #             )
+    #         if participants[0] == participants[1]:
+    #             return Response(
+    #                 {"error": "Cannot create a chat with yourself"},
+    #                 status=status.HTTP_400_BAD_REQUEST
+    #             )
+
+    #     try:
+    #         if chat_type == 'single':
+    #             # Find chats that contain both participants
+    #             participant1, participant2 = participants
+    #             existing_chat = Chat.objects.filter(
+    #                 type='single',
+    #                 participants__id=participant1
+    #             ).filter(
+    #                 participants__id=participant2
+    #             ).annotate(
+    #                 num_participants=Count('participants')
+    #             ).filter(num_participants=2).first()
+
+    #             if existing_chat:
+    #                 return Response(
+    #                     self.get_serializer(existing_chat).data
+    #                 )
+
+    #         # If no existing chat found, create new chat
+    #         chat = Chat.objects.create(type=chat_type, name=name)
+    #         chat.participants.set(participants)
+            
+    #         return Response(
+    #             self.get_serializer(chat).data,
+    #             status=status.HTTP_201_CREATED
+    #         )
+
+    #     except Exception as e:
+    #         print(f"Error creating chat: {str(e)}")
+    #         return Response(
+    #             {
+    #                 "error": "An error occurred while creating the chat.",
+    #                 "detail": str(e)
+    #             },
+    #             status=status.HTTP_500_INTERNAL_SERVER_ERROR
+    #         )
+
+class UserStatusViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = UserStatusSerializer
+    
+    def get_queryset(self):
+        return UserStatus.objects.all()
+
+    @action(detail=False, methods=['post'])
+    def update_status(self, request):
+        """
+        Updates user's online status and last seen
+        """
+        user_status = UserStatus.get_or_create_user_status(request.user)
+        status_type = request.data.get('status', 'online')
+
+        if status_type == 'online':
+            user_status.mark_online()
+        else:
+            user_status.mark_offline()
+
+        self._notify_status_change(user_status)
+        
+        serializer = self.get_serializer(user_status)
+        return Response(serializer.data)
+
+    def _notify_status_change(self, user_status):
+        """
+        Notifies relevant users about status change
+        """
+        channel_layer = get_channel_layer()
+        status_data = self.get_serializer(user_status).data
+        
+        # Notify users who have an active chat with this user
+        chats = Chat.objects.filter(participants=user_status.user)
+        for chat in chats:
+            for participant in chat.participants.all():
+                if participant != user_status.user:
+                    async_to_sync(channel_layer.group_send)(
+                        f"user_{participant.id}",
+                        {
+                            "type": "user.status",
+                            "status": status_data
+                        }
+                    )
 
 class MessageViewSet(viewsets.ModelViewSet):
     serializer_class = MessageSerializer

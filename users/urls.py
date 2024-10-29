@@ -15,6 +15,8 @@ from .views import (
     LikeViewSet,
     NotificationViewSet,
     CommentViewSet,
+    ChatViewSet,
+    UserStatusViewSet,
 
     RegisterView, 
     LoginView, 
@@ -26,6 +28,7 @@ from .views import (
 
 router = DefaultRouter()
 
+router.register(r'chats', ChatViewSet, basename='chat')
 router.register(r'users', UserViewSet)
 router.register(r'profiles', ProfileViewSet)
 router.register(r'posts', PostViewSet)
@@ -61,4 +64,16 @@ urlpatterns = [
     path('profiles/<int:pk>/update/', ProfileViewSet.as_view({'patch': 'update_profile'}), name='update-profile'),
     path('profiles/<int:pk>/remove-photo/', ProfileViewSet.as_view({'delete': 'remove_profile_picture'}), name='remove-profile-photo'),
 
+    path('users/suggestions/', UserViewSet.as_view({'get': 'suggestions'}), name='user-suggestions'),
 ]
+
+# def check_urls(urlpatterns, prefix=''):
+#     for pattern in urlpatterns:
+#         if hasattr(pattern, 'url_patterns'):
+#             check_urls(pattern.url_patterns, prefix + str(pattern))  # Remove _route
+#         else:
+#             print(f"URL Pattern: {prefix + str(pattern.pattern)}")
+
+# # Add this at the bottom of urls.py
+# print("\nAvailable URL patterns:")
+# check_urls(urlpatterns)

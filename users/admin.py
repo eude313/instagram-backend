@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import User, Profile, Post, Story, Reel, Message, Follow, Like, Notification, Comment, Media, UserStatus, SavedPost
+from .models import User, Profile, Post, Story, Reel, Message, Follow, Like, Notification, Comment, Media, UserStatus, SavedPost, Chat
 
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
@@ -52,11 +52,24 @@ class UserStatusAdmin(admin.ModelAdmin):
             return self.readonly_fields + ('user',)
         return self.readonly_fields
 
+@admin.register(Chat)
+class ChatAdmin(admin.ModelAdmin):
+    list_display = ('name', 'type', 'created_at', 'updated_at')
+    search_fields = ('name',)
+    list_filter = ('type',)
+
 @admin.register(Message)
 class MessageAdmin(admin.ModelAdmin):
-    list_display = ('sender', 'recipient', 'timestamp', 'is_read')
-    search_fields = ('sender__username', 'recipient__username', 'content')
+    list_display = ('sender', 'chat', 'media_type', 'timestamp')
+    list_filter = ('media_type', 'timestamp')
+    search_fields = ('sender__username', 'content', 'chat__name')
+    readonly_fields = ('timestamp',)
 
+    def get_readonly_fields(self, request, obj=None):
+        if obj:
+            return self.readonly_fields + ('sender', 'chat')
+        return self.readonly_fields
+    
 @admin.register(Follow)
 class FollowAdmin(admin.ModelAdmin):
     list_display = ('follower', 'followed', 'created_at')

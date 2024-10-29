@@ -344,8 +344,132 @@ class MediaItem(models.Model):
 
 
 
+    # path('chats/', include([
+    #     # Create or get existing chat
+    #     path('create-or-get/', ChatViewSet.as_view({'post': 'create_or_get_chat'})),
+        
+    #     # Get all chats for current user
+    #     path('my-chats/', ChatViewSet.as_view({'get': 'list'})),
+        
+    #     # Get specific chat details
+    #     path('<int:chat_id>/', ChatViewSet.as_view({'get': 'retrieve'})),
+        
+    #     # Chat messages
+    #     path('<int:chat_id>/messages/', include([
+    #         # Get messages for a chat
+    #         path('', MessageViewSet.as_view({'get': 'list', 'post': 'create'})),
+            
+    #         # Mark message as read
+    #         path('<int:message_id>/read/', MessageViewSet.as_view({'post': 'mark_as_read'})),
+            
+    #         # Delete message
+    #         path('<int:message_id>/', MessageViewSet.as_view({'delete': 'destroy'})),
+    #     ])),
+        
+    #     # Group chat specific endpoints
+    #     path('<int:chat_id>/participants/', include([
+    #         # Add participant to group
+    #         path('add/', ChatViewSet.as_view({'post': 'add_participant'})),
+            
+    #         # Remove participant from group
+    #         path('remove/', ChatViewSet.as_view({'post': 'remove_participant'})),
+            
+    #         # List all participants
+    #         path('', ChatViewSet.as_view({'get': 'list_participants'})),
+    #     ])),
+        
+    #     # Update group chat settings (name, etc.)
+    #     path('<int:chat_id>/settings/', ChatViewSet.as_view({'patch': 'update_chat_settings'})),
+    # ])),
+
+    # path('users/status/', include([
+    #     # Get user's online status
+    #     path('<int:user_id>/', UserStatusViewSet.as_view({'get': 'retrieve'})),
+        
+    #     # Update user's online status
+    #     path('update/', UserStatusViewSet.as_view({'post': 'update_status'})),
+    # ])),
 
 
+    # @action(detail=False, methods=['POST'])
+    # def create_or_get(self, request): 
+    #     participants = request.data.get('participants', [])
+    #     chat_type = request.data.get('type', 'single')
+    #     name = request.data.get('name')
+
+    #     # Add some debugging prints
+    #     print(f"Received request data: {request.data}")
+    #     print(f"Participants: {participants}")
+    #     print(f"Chat type: {chat_type}")
+    #     print(f"Name: {name}")
+
+    #     if not participants:
+    #         return Response(
+    #             {"error": "Participants list cannot be empty"}, 
+    #             status=status.HTTP_400_BAD_REQUEST
+    #         )
+
+    #     if chat_type == 'single' and len(participants) != 2:
+    #         return Response(
+    #             {"error": "Single chat must have exactly 2 participants"},
+    #             status=status.HTTP_400_BAD_REQUEST
+    #         )
+
+    #     try:
+    #         if chat_type == 'single':
+    #             # Check if chat already exists
+    #             existing_chat = Chat.objects.filter(
+    #                 type='single',
+    #                 participants__id__in=participants  # Modified this line
+    #             ).annotate(
+    #                 participant_count=count('participants')
+    #             ).filter(participant_count=len(participants))
+
+    #             if existing_chat.exists():
+    #                 return Response(
+    #                     self.get_serializer(existing_chat.first()).data
+    #                 )
+
+    #         # Create new chat
+    #         chat = Chat.objects.create(type=chat_type, name=name)
+    #         chat.participants.set(participants)
+    #         return Response(
+    #             self.get_serializer(chat).data,
+    #             status=status.HTTP_201_CREATED
+    #         )
+    #     except Exception as e:  # Catch all exceptions for now (refine later)
+    #         print(f"Error creating chat: {e}")
+    #         return Response(
+    #             {"error": "An error occurred while creating the chat."},
+    #             status=status.HTTP_500_INTERNAL_SERVER_ERROR
+    #         )
+
+
+
+# class UserStatusViewSet(viewsets.ModelViewSet):
+#     serializer_class = UserStatusSerializer
+#     permission_classes = [permissions.IsAuthenticated]
+
+#     def get_queryset(self):
+#         return UserStatus.objects.all()
+
+#     @action(detail=False, methods=['post'])
+#     def update_status(self, request):
+#         user_status = UserStatus.get_or_create_user_status(request.user)
+#         status_type = request.data.get('status', 'online')
+
+#         if status_type == 'online':
+#             user_status.mark_online()
+#         else:
+#             user_status.mark_offline()
+
+#         serializer = self.get_serializer(user_status)
+#         return Response(serializer.data)
+
+#     def retrieve(self, request, pk=None):
+#         user_status = get_object_or_404(UserStatus, user_id=pk)
+#         serializer = self.get_serializer(user_status)
+#         return Response(serializer.data)
 
 
 

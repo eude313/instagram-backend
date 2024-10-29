@@ -131,6 +131,7 @@ class Post(models.Model):
     likes_count = models.PositiveIntegerField(default=0)
     comments_count = models.PositiveIntegerField(default=0)
     media = models.ManyToManyField(Media, blank=True, related_name='post_media')
+    tags = models.JSONField(default=list, blank=True)  # Store tag positions and usernames
 
     def __str__(self):
         return f"Post by {self.user.username} on {self.created_at.strftime('%Y-%m-%d %H:%M')}"
@@ -184,6 +185,59 @@ class Story(models.Model):
     def __str__(self):
         return f"Story by {self.user.username} on {self.created_at.strftime('%Y-%m-%d %H:%M')}"
 
+#Chat model
+class Chat(models.Model):
+    CHAT_TYPES = (
+        ('single', 'Single'),
+        ('group', 'Group'),
+    )
+    
+    type = models.CharField(max_length=6, choices=CHAT_TYPES, default='single')
+    participants = models.ManyToManyField(User, related_name='chats')
+    name = models.CharField(max_length=255, blank=True, null=True)  
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        if self.type == 'single' and not self.name and self.participants.count() == 2:
+            participant_usernames = "-".join([p.username for p in self.participants.all()])
+            self.name = participant_usernames
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        participants = self.participants.all()
+        if self.type == 'single' and participants.count() == 2:
+            return f"Chat between {participants[0].username} and {participants[1].username}"
+        return f"Group: {self.name}" if self.name else "Unnamed Group"
+
+    @property
+    def last_message(self):
+        return self.messages.order_by('-timestamp').first()
+
+# Messages model
+class Message(models.Model):
+    MEDIA_TYPES = (
+        ('text', 'Text'),
+        ('image', 'Image'),
+        ('video', 'Video'),
+        ('audio', 'Audio'),
+    )
+    
+    chat = models.ForeignKey(Chat, related_name='messages', on_delete=models.CASCADE)
+    sender = models.ForeignKey(User, related_name='sent_messages', on_delete=models.CASCADE)
+    content = models.TextField(blank=True)
+    file = models.FileField(upload_to='message_media/', blank=True, null=True)
+    media_type = models.CharField(max_length=5, choices=MEDIA_TYPES, default='text')
+    timestamp = models.DateTimeField(auto_now_add=True)
+    read_by = models.ManyToManyField(User, related_name='read_messages', blank=True)
+
+    def mark_as_read(self, user):
+        self.read_by.add(user)
+        self.save()
+
+    def __str__(self):
+        return f"Message in {self.chat} from {self.sender.username}"
+
 # User status model
 class UserStatus(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE)
@@ -211,33 +265,6 @@ class UserStatus(models.Model):
 
     def __str__(self):
         return f"{self.user.username} - {'Online' if self.is_online else f'Last seen at {self.last_seen}'}"
-
-# Messages model
-class Message(models.Model):
-    MEDIA_TYPES = (
-        ('text', 'Text'),
-        ('image', 'Image'),
-        ('video', 'Video'),
-        ('audio', 'Audio'),
-    )
-
-    sender = models.ForeignKey(User, related_name='sent_messages', on_delete=models.CASCADE)
-    recipient = models.ForeignKey(User, related_name='received_messages', on_delete=models.CASCADE)
-    content = models.TextField(blank=True)  
-    file = models.FileField(upload_to='message_media/', blank=True, null=True)  
-    media_type = models.CharField(max_length=5, choices=MEDIA_TYPES, default='text')
-    timestamp = models.DateTimeField(auto_now_add=True)
-    is_read = models.BooleanField(default=False)
-    read_at = models.DateTimeField(null=True, blank=True)
-
-    def mark_as_read(self):
-        if not self.is_read:
-            self.is_read = True
-            self.read_at = timezone.now()
-            self.save()
-
-    def __str__(self):
-        return f"Message from {self.sender.username} to {self.recipient.username}"
 
 # Comments model
 class Comment(models.Model):
